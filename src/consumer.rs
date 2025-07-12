@@ -27,14 +27,9 @@ mod unix {
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Option<Self::Item>> {
             let listener = unsafe { self.map_unchecked_mut(|s| &mut s.listener) };
-            match listener.poll_next(cx) {
-                std::task::Poll::Ready(Some(stream)) => match stream {
-                    Ok(s) => std::task::Poll::Ready(Some(Ok(ConsumerClient { stream: s }))),
-                    Err(e) => std::task::Poll::Ready(Some(Err(e))),
-                },
-                std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
-                std::task::Poll::Pending => std::task::Poll::Pending,
-            }
+            listener
+                .poll_next(cx)
+                .map(|opt| opt.map(|res| res.map(|stream| ConsumerClient { stream })))
         }
     }
 
