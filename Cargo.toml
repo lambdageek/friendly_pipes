@@ -1,0 +1,19 @@
+[package]
+name = "friendly_pipes"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["producer", "consumer"]
+producer = []
+consumer = []
+async_server = ["consumer", "dep:tokio"]
+
+
+
+[dependencies]
+tokio = {version = "1.46", optional = true}
+
+
+[dev-dependencies]
+friendly_pipes = { path = ".", features = ["producer", "async_server"]}
