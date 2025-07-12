@@ -11,7 +11,6 @@ mod unix {
     pub struct ConsumerClient {
         stream: UnixStream,
     }
-
     impl Consumer {
         pub fn new(name: &std::ffi::OsStr) -> std::io::Result<Self> {
             let listener = UnixListener::bind(name)?;
@@ -53,36 +52,66 @@ mod unix {
 
 #[cfg(windows)]
 mod windows {
+    use futures::{StreamExt, stream};
     use futures_core::Stream;
+    use futures_core::stream::BoxStream;
     use tokio::io::AsyncRead;
     use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+
     pub struct Consumer {
-        server: NamedPipeServer,
-        pipe_name: std::ffi::OsString,
+        s: BoxStream<'static, std::io::Result<ConsumerClient>>,
     }
 
     pub struct ConsumerClient {
         stream: NamedPipeServer,
     }
 
+    struct Server {
+        pipe_name: std::ffi::OsString,
+        server: NamedPipeServer,
+    }
+
     impl Consumer {
         pub fn new(name: &std::ffi::OsStr) -> std::io::Result<Self> {
-            ServerOptions::new()
-                .first_pipe_instance(true)
-                .create(name)
-                .map(|server| Consumer {
-                    server,
-                    pipe_name: name.to_owned(),
+            enum Seed {
+                Server(Server),
+                Failed,
+            }
+            let first_server = Server {
+                pipe_name: name.to_owned(),
+                server: ServerOptions::new()
+                    .first_pipe_instance(true)
+                    .create(name)?,
+            };
+
+            let consumer =
+                stream::unfold(Seed::Server(first_server), async move |seed| match seed {
+                    Seed::Failed => None,
+                    Seed::Server(server) => match accept_connection(server).await {
+                        Ok(Some((client, new_server))) => {
+                            Some((Ok(client), Seed::Server(new_server)))
+                        }
+                        Ok(None) => None,
+                        Err(e) => Some((Err(e), Seed::Failed)),
+                    },
                 })
+                .boxed();
+            Ok(Consumer { s: consumer })
         }
     }
 
-    async fn accept_connection(consumer: &mut Consumer) -> std::io::Result<ConsumerClient> {
-        let server = &consumer.server;
+    async fn accept_connection(
+        server: Server,
+    ) -> std::io::Result<Option<(ConsumerClient, Server)>> {
+        let Server { pipe_name, server } = server;
         server.connect().await?;
-        let new_server = ServerOptions::new().create(&consumer.pipe_name)?;
-        let stream = std::mem::replace(&mut consumer.server, new_server);
-        Ok(ConsumerClient { stream })
+        let client = ConsumerClient { stream: server };
+        let new_server = ServerOptions::new().create(&pipe_name)?;
+        let new_server = Server {
+            pipe_name,
+            server: new_server,
+        };
+        Ok(Some((client, new_server)))
     }
 
     impl Stream for Consumer {
@@ -92,10 +121,7 @@ mod windows {
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Option<Self::Item>> {
-            use std::pin::pin;
-            let conn = accept_connection(&mut self);
-            let pin = pin!(conn);
-            pin.poll(cx).map(Some)
+            self.s.poll_next_unpin(cx)
         }
     }
 
