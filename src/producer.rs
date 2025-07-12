@@ -35,6 +35,7 @@ mod windows {
         use windows::Win32::Storage::FileSystem::{
             CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_NONE, OPEN_EXISTING,
         };
+        use windows::Win32::System::Pipes::WaitNamedPipeW;
 
         let hname = HSTRING::from(name);
 
@@ -51,10 +52,15 @@ mod windows {
         }?;
 
         if handle.is_invalid() {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(unsafe { std::fs::File::from_raw_handle(handle.0) })
+            return Err(std::io::Error::last_os_error());
         }
+
+        let w: bool = unsafe { WaitNamedPipeW(&hname, 20000) }.into();
+        if !w {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+
+        Ok(unsafe { std::fs::File::from_raw_handle(handle.0) })
     }
 
     impl Producer {
