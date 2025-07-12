@@ -22,7 +22,7 @@ fn main() -> std::process::ExitCode {
                     .expect("Failed to start client");
                 println!("Client started with PID: {}", child.id());
                 child.wait().expect("Failed to wait for client process");
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 server.stop();
             });
     } else if std::env::args().nth(1).is_some_and(|arg| arg == "client") {
