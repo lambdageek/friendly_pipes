@@ -6,12 +6,16 @@ edition = "2024"
 [features]
 default = ["producer", "consumer"]
 producer = []
-consumer = []
-async_server = ["consumer", "dep:tokio"]
+consumer = ["dep:futures-core", "dep:tokio", "dep:tokio-stream", ]
+async_server = ["consumer", "dep:tokio-util"]
 
 
 [dependencies]
-tokio = {version = "1.46", optional = true}
+tokio = {version = "1.46", optional = true, features = ["net"]}
+tokio-stream = { version = "0.1", optional = true, features = ["net"]}
+tokio-util = { version = "0.7", optional = true }
+futures-core = { version = "0.3", optional = true }
+
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.60", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_System_Pipes"] }
@@ -19,3 +23,4 @@ windows-core = "0.60"
 
 [dev-dependencies]
 friendly_pipes = { path = ".", features = ["producer", "async_server"]}
+tokio = { version = "1.46", features = ["full"] }
