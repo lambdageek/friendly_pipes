@@ -1,5 +1,5 @@
 #[cfg(false)]
-use friendly_pipes::{consumer, async_server};
+use friendly_pipes::{async_server, consumer};
 
 fn main() -> std::process::ExitCode {
     if std::env::args().count() < 2 {

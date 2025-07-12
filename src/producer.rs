@@ -1,8 +1,7 @@
-
 #[cfg(unix)]
 mod unix {
-    use std::io::Write;
     use std::ffi::OsStr;
+    use std::io::Write;
     use std::os::unix::net::UnixStream;
     pub struct Producer {
         stream: UnixStream,
@@ -22,8 +21,8 @@ mod unix {
 
 #[cfg(windows)]
 mod windows {
-    use std::io::Write;
     use std::ffi::OsStr;
+    use std::io::Write;
     use std::os::windows::io::FromRawHandle;
 
     use windows_core::HSTRING;
@@ -33,7 +32,9 @@ mod windows {
 
     fn open_pipe(name: &OsStr) -> std::io::Result<std::fs::File> {
         use windows::Win32::Foundation::GENERIC_WRITE;
-        use windows::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING, FILE_SHARE_NONE, FILE_FLAGS_AND_ATTRIBUTES};
+        use windows::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_NONE, OPEN_EXISTING,
+        };
 
         let hname = HSTRING::from(name);
 
@@ -56,7 +57,7 @@ mod windows {
         }
     }
 
-   impl Producer {
+    impl Producer {
         pub fn new(name: &OsStr) -> std::io::Result<Self> {
             let pipe = open_pipe(name)?;
             Ok(Producer { pipe })
