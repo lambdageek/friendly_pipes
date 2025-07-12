@@ -25,6 +25,7 @@ where
                 break;
             }
             it = consumer.next() => {
+                println!("New client connected.");
                 match it {
                     Some(Ok(mut client)) => {
                         let on_line = on_line.clone();

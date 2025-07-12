@@ -64,7 +64,9 @@ mod windows {
         }
 
         pub fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-            self.pipe.write(data)
+            let len = self.pipe.write(data)?;
+            self.pipe.flush()?;
+            Ok(len)
         }
     }
 }
