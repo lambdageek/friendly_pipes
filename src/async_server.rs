@@ -2,10 +2,10 @@ use std::ffi::OsStr;
 
 use crate::consumer::Consumer;
 
+use futures_util::StreamExt;
 use tokio::io::AsyncReadExt;
 use tokio::select;
 use tokio::task;
-use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 
 pub async fn start_full<F>(
