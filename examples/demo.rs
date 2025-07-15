@@ -1,43 +1,91 @@
 use friendly_pipes::{async_server, producer};
+use serde::{Serialize, Deserialize};
 
 const ENV: &str = "PIPE_PATH";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Message {
+    #[serde(rename = "type")]
+    msg_type: String,
+    content: String,
+}
+
+impl Message {
+    fn new_info(content: String) -> Self {
+        Message {
+            msg_type: "info".to_string(),
+            content,
+        }
+    }
+}
 
 fn main() -> std::process::ExitCode {
     if std::env::args().count() < 2 {
         println!("server");
         let path = ensure_pipe_exists();
-        let on_line = |line: &[u8]| {
-            println!("Received line: {}", String::from_utf8_lossy(line));
+        let on_recv_line = |line:String | {
+            let msg = serde_json::from_str::<Message>(&line)
+                .expect("Failed to parse JSON message");
+            println!("Received message [type = {}]: '{}'", msg.msg_type, msg.content);
         };
         tokio::runtime::Runtime::new()
             .expect("Failed to create Tokio runtime")
             .block_on(async {
                 let current_exe =
                     std::env::current_exe().expect("Failed to get current executable path");
-                let server = async_server::start(&path, on_line);
-                let mut child = std::process::Command::new(current_exe)
-                    .env(ENV, &path)
-                    .arg("client")
-                    .spawn()
-                    .expect("Failed to start client");
-                println!("Client started with PID: {}", child.id());
-                child.wait().expect("Failed to wait for client process");
+                let server = async_server::start_lines(&path, on_recv_line);
+                let children = run_children(&current_exe, &path);
+                wait_children(children);
                 server.stop();
             });
     } else if std::env::args().nth(1).is_some_and(|arg| arg == "client") {
-        println!("client");
-        let path = std::env::var_os(ENV).expect("PIPE_PATH environment variable not set");
-        let mut client = producer::Producer::new(&path).expect("Failed to create producer");
-        let msg = format!("Hello from client {pid}!\n", pid = std::process::id());
-        client
-            .write(msg.as_bytes())
-            .expect("Failed to write to pipe");
-        println!("Message sent to server.");
+        run_client();
     } else {
         eprintln!("Usage: {} [client]", std::env::args().next().unwrap());
         return std::process::ExitCode::FAILURE;
     }
     std::process::ExitCode::SUCCESS
+}
+
+fn run_client() {
+    println!("client");
+    let path = std::env::var_os(ENV).expect("PIPE_PATH environment variable not set");
+    let mut client = producer::Producer::new(&path).expect("Failed to create producer");
+    let msg = Message::new_info(format!("Hello from client {pid}!", pid = std::process::id()));
+    client
+        .writeln_json(&msg)
+        .expect("Failed to write to pipe");
+    println!("Message sent to server.");
+}
+
+fn run_children(exe: &std::path::Path, pipe_path: &std::ffi::OsStr) -> Vec<std::process::Child> {
+    let mut children = Vec::new();
+    for _ in 0..4 {
+        children.push(run_child(exe, pipe_path))
+    }
+    children
+}
+
+fn run_child(exe: &std::path::Path, pipe_path: &std::ffi::OsStr) -> std::process::Child {
+    let child = std::process::Command::new(exe)
+        .env(ENV, pipe_path)
+        .arg("client")
+        .spawn()
+        .expect("Failed to start client");
+    println!("Client started with PID: {}", child.id());
+    child
+}
+
+fn wait_children(children: Vec<std::process::Child>) {
+    for mut child in children {
+        let status = child.wait().expect("Failed to wait for child process");
+        let id = child.id();
+        if status.success() {
+            println!("Child process {id} exited successfully.");
+        } else {
+            eprintln!("Child process {id} exited with an error: {status}");
+        }
+    }
 }
 
 #[cfg(unix)]

@@ -8,6 +8,7 @@ default = ["producer", "consumer"]
 producer = []
 consumer = ["dep:futures-core", "dep:tokio", "dep:futures-util"]
 async_server = ["consumer", "dep:tokio-util"]
+json = ["dep:serde", "dep:serde_json", "dep:tokio-util", "tokio-util/io", "tokio-util/codec"]
 
 
 [dependencies]
@@ -15,11 +16,13 @@ tokio = {version = "1.46", optional = true, features = ["net"]}
 tokio-util = { version = "0.7", optional = true }
 futures-core = { version = "0.3", optional = true }
 futures-util = { version = "0.3", optional = true }
+serde = { version = "1.0", optional = true, features = ["derive"] }
+serde_json = { version = "1.0", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.60", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_System_IO", "Win32_System_Pipes"] }
 windows-core = "0.60"
 
 [dev-dependencies]
-friendly_pipes = { path = ".", features = ["producer", "async_server"]}
+friendly_pipes = { path = ".", features = ["producer", "async_server", "json"]}
 tokio = { version = "1.46", features = ["full"] }

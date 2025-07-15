@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 
 use crate::consumer::Consumer;
+use crate::consumer::ConsumerClient;
 
 use futures_util::StreamExt;
 use tokio::io::AsyncReadExt;
@@ -15,14 +16,13 @@ pub trait ReceiverSource {
 }
 
 pub trait Receiver {
-    type Item : ?Sized;
+    type Item: ?Sized;
     /// Called when new data is received from the client
     fn receive(&self, data: &Self::Item) -> std::io::Result<()>;
 }
 
 /// A receiver source that just clones a prototypical receiver
-pub struct PrototypeReceiverSource<R>
-{
+pub struct PrototypeReceiverSource<R> {
     prototype: std::sync::Arc<R>,
 }
 
@@ -33,13 +33,14 @@ where
     F: Fn(&T) + Send + Sync + 'static,
 {
     receive: F,
-    phantom: std::marker::PhantomData<fn(&T)>
+    phantom: std::marker::PhantomData<fn(&T)>,
 }
 
-impl<R> PrototypeReceiverSource<R>
-{
+impl<R> PrototypeReceiverSource<R> {
     pub fn new(r: R) -> Self {
-        PrototypeReceiverSource { prototype: std::sync::Arc::new(r) }
+        PrototypeReceiverSource {
+            prototype: std::sync::Arc::new(r),
+        }
     }
 }
 
@@ -89,14 +90,13 @@ where
     }
 }
 
-pub async fn start_full<R>(
+async fn server<C>(
     path: &OsStr,
     finish: CancellationToken,
-    mut receiver_source: R,
+    mut client_action: C,
 ) -> std::io::Result<()>
 where
-    R: ReceiverSource,
-    R::Receiver: Receiver<Item = [u8]> + Send + 'static,
+    C: FnMut(ConsumerClient),
 {
     let mut consumer = Consumer::new(path)?;
     loop {
@@ -106,42 +106,57 @@ where
                 break;
             }
             it = consumer.next() => {
-                println!("New client connected.");
                 match it {
-                    Some(Ok(mut client)) => {
-                        let receiver = receiver_source.new_receiver();
-                        task::spawn(async move {
-                        let mut buffer = vec![0; 1024];
-                        loop {
-                            match client.read(&mut buffer).await {
-                                Ok(0) => {
-                                    println!("Client disconnected.");
-                                    break;
-                                }
-                                Ok(n) => {
-                                    receiver.receive(&buffer[..n]).unwrap();
-                                }
-                                Err(e) => {
-                                    eprintln!("Error reading from client: {e}");
-                                    break;
-                                }
-                            }
-                        }
-                    });
-                },
-                Some(Err(e)) => {
-                    eprintln!("Error accepting client: {e}");
-                    break;
+                    Some(Ok(client)) => {
+                        println!("New client connected.");
+                        client_action(client);
+                    },
+                    Some(Err(e)) => {
+                        eprintln!("Error accepting client: {e}");
+                        break;
+                    }
+                    None => {
+                        println!("No more clients connected.");
+                        break;
+                    }
                 }
-                None => {
-                    println!("No more clients connected.");
-                    break;
-                }
-            }
             }
         }
     }
     Ok(())
+}
+
+pub async fn start_full<R>(
+    path: &OsStr,
+    finish: CancellationToken,
+    mut receiver_source: R,
+) -> std::io::Result<()>
+where
+    R: ReceiverSource,
+    R::Receiver: Receiver<Item = [u8]> + Send + 'static,
+{
+    server(path, finish, |mut client| {
+        let receiver = receiver_source.new_receiver();
+        task::spawn(async move {
+            let mut buffer = vec![0; 1024];
+            loop {
+                match client.read(&mut buffer).await {
+                    Ok(0) => {
+                        println!("Client disconnected.");
+                        break;
+                    }
+                    Ok(n) => {
+                        receiver.receive(&buffer[..n]).unwrap();
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading from client: {e}");
+                        break;
+                    }
+                }
+            }
+        });
+    })
+    .await
 }
 
 pub struct AsyncServer {
@@ -172,3 +187,52 @@ impl AsyncServer {
         self.cancel.cancel();
     }
 }
+
+#[cfg(feature = "json")]
+mod json {
+    use super::*;
+    use tokio_util::codec::{FramedRead, LinesCodec};
+    // use tokio_util::io::ReaderStream;
+
+    pub struct AsyncLinesServer {
+        cancel: CancellationToken,
+    }
+
+    impl AsyncLinesServer {
+        pub fn stop(&self) {
+            self.cancel.cancel();
+        }
+    }
+
+    pub fn start_lines<F>(
+        path: &OsStr,
+        on_line: F,
+    ) -> AsyncLinesServer
+    where
+        F: Fn(String) + Send + Sync + 'static,
+    {
+        let cancel = CancellationToken::new();
+        let finish = cancel.clone();
+        let on_line = std::sync::Arc::new(on_line);
+        let path = path.to_owned();
+        tokio::spawn(async move {
+            server(&path, finish, |client| {
+                let on_line = on_line.clone();
+                tokio::spawn(async move {
+                    let mut stream = FramedRead::new(client, LinesCodec::new());
+                    while let Some(line) = stream.next().await {
+                        match line {
+                            Ok(line) => on_line(line),
+                            Err(e) => eprintln!("Error reading line: {e}"),
+                        }
+                    }
+                });
+            })
+            .await
+            .unwrap();
+        });
+        AsyncLinesServer { cancel }
+    }
+}
+
+pub use json::start_lines;
