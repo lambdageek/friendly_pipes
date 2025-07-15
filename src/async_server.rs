@@ -9,87 +9,6 @@ use tokio::select;
 use tokio::task;
 use tokio_util::sync::CancellationToken;
 
-/// Called by the server every time a new client connects
-pub trait ReceiverSource {
-    type Receiver: Receiver + Send + 'static;
-    fn new_receiver(&mut self) -> Self::Receiver;
-}
-
-pub trait Receiver {
-    type Item: ?Sized;
-    /// Called when new data is received from the client
-    fn receive(&self, data: &Self::Item) -> std::io::Result<()>;
-}
-
-/// A receiver source that just clones a prototypical receiver
-pub struct PrototypeReceiverSource<R> {
-    prototype: std::sync::Arc<R>,
-}
-
-/// A receiver that just calls a closure repeatedly
-pub struct ClosureReceiver<T, F>
-where
-    T: ?Sized,
-    F: Fn(&T) + Send + Sync + 'static,
-{
-    receive: F,
-    phantom: std::marker::PhantomData<fn(&T)>,
-}
-
-impl<R> PrototypeReceiverSource<R> {
-    pub fn new(r: R) -> Self {
-        PrototypeReceiverSource {
-            prototype: std::sync::Arc::new(r),
-        }
-    }
-}
-
-impl<R> ReceiverSource for PrototypeReceiverSource<R>
-where
-    R: Receiver + Clone + Send + Sync + 'static,
-{
-    type Receiver = std::sync::Arc<R>;
-
-    fn new_receiver(&mut self) -> Self::Receiver {
-        self.prototype.clone()
-    }
-}
-
-impl<R> Receiver for std::sync::Arc<R>
-where
-    R: Receiver + Send + Sync + 'static,
-{
-    type Item = R::Item;
-    fn receive(&self, data: &Self::Item) -> std::io::Result<()> {
-        self.as_ref().receive(data)
-    }
-}
-
-impl<T, F> ClosureReceiver<T, F>
-where
-    T: ?Sized,
-    F: Fn(&T) + Send + Sync + 'static,
-{
-    pub fn new(receive: F) -> Self {
-        ClosureReceiver {
-            receive,
-            phantom: std::marker::PhantomData,
-        }
-    }
-}
-
-impl<T, F> Receiver for ClosureReceiver<T, F>
-where
-    T: ?Sized,
-    F: Fn(&T) + Send + Sync + 'static,
-{
-    type Item = T;
-    fn receive(&self, data: &Self::Item) -> std::io::Result<()> {
-        (self.receive)(data);
-        Ok(())
-    }
-}
-
 async fn server<C>(
     path: &OsStr,
     finish: CancellationToken,
@@ -126,17 +45,16 @@ where
     Ok(())
 }
 
-pub async fn start_full<R>(
+pub async fn start_full<F>(
     path: &OsStr,
     finish: CancellationToken,
-    mut receiver_source: R,
+    callback_prototype: std::sync::Arc<F>,
 ) -> std::io::Result<()>
 where
-    R: ReceiverSource,
-    R::Receiver: Receiver<Item = [u8]> + Send + 'static,
+    F: Fn(&[u8]) + Send + Sync + 'static,
 {
     server(path, finish, |mut client| {
-        let receiver = receiver_source.new_receiver();
+        let callback = callback_prototype.clone();
         task::spawn(async move {
             let mut buffer = vec![0; 1024];
             loop {
@@ -146,7 +64,7 @@ where
                         break;
                     }
                     Ok(n) => {
-                        receiver.receive(&buffer[..n]).unwrap();
+                        callback(&buffer[..n]);
                     }
                     Err(e) => {
                         eprintln!("Error reading from client: {e}");
@@ -159,11 +77,12 @@ where
     .await
 }
 
-pub struct AsyncServer {
+pub struct ByteSliceServer {
     cancel: CancellationToken,
+    join_handle: task::JoinHandle<()>,
 }
 
-pub fn start<F>(path: &OsStr, on_data: F) -> AsyncServer
+pub fn start<F>(path: &OsStr, on_data: F) -> ByteSliceServer
 where
     F: for<'a> Fn(&'a [u8]) + Send + Sync + 'static,
 {
@@ -172,42 +91,50 @@ where
     let finish = cancel.clone();
     let path = path.to_owned();
 
-    let prototype = std::sync::Arc::new(ClosureReceiver::new(on_data));
-    let receiver_source = PrototypeReceiverSource::new(prototype);
+    let callback = std::sync::Arc::new(on_data);
 
-    tokio::spawn(async move {
-        start_full(&path, finish, receiver_source).await.unwrap();
+    let join_handle = tokio::spawn(async move {
+        start_full(&path, finish, callback).await.unwrap();
     });
 
-    AsyncServer { cancel }
-}
-
-impl AsyncServer {
-    pub fn stop(&self) {
-        self.cancel.cancel();
+    ByteSliceServer {
+        cancel,
+        join_handle,
     }
 }
 
-#[cfg(feature = "json")]
-mod json {
+impl ByteSliceServer {
+    pub fn stop(&self) {
+        self.cancel.cancel();
+    }
+
+    pub async fn wait(self) -> Result<(), task::JoinError> {
+        self.join_handle.await
+    }
+}
+
+#[cfg(feature = "lines_server")]
+mod lines_server {
     use super::*;
     use tokio_util::codec::{FramedRead, LinesCodec};
     // use tokio_util::io::ReaderStream;
 
-    pub struct AsyncLinesServer {
+    pub struct StringLinesServer {
         cancel: CancellationToken,
+        join_handle: task::JoinHandle<()>,
     }
 
-    impl AsyncLinesServer {
+    impl StringLinesServer {
         pub fn stop(&self) {
             self.cancel.cancel();
         }
+
+        pub async fn wait(self) -> Result<(), task::JoinError> {
+            self.join_handle.await
+        }
     }
 
-    pub fn start_lines<F>(
-        path: &OsStr,
-        on_line: F,
-    ) -> AsyncLinesServer
+    pub fn start_lines<F>(path: &OsStr, on_line: F) -> StringLinesServer
     where
         F: Fn(String) + Send + Sync + 'static,
     {
@@ -215,7 +142,7 @@ mod json {
         let finish = cancel.clone();
         let on_line = std::sync::Arc::new(on_line);
         let path = path.to_owned();
-        tokio::spawn(async move {
+        let join_handle = tokio::spawn(async move {
             server(&path, finish, |client| {
                 let on_line = on_line.clone();
                 tokio::spawn(async move {
@@ -231,8 +158,11 @@ mod json {
             .await
             .unwrap();
         });
-        AsyncLinesServer { cancel }
+        StringLinesServer {
+            cancel,
+            join_handle,
+        }
     }
 }
 
-pub use json::start_lines;
+pub use lines_server::start_lines;

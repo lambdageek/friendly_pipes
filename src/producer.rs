@@ -1,7 +1,6 @@
 #[cfg(unix)]
 mod unix {
     use std::ffi::OsStr;
-    use std::io::Write;
     use std::os::unix::net::UnixStream;
     pub struct Producer {
         stream: UnixStream,
@@ -12,9 +11,15 @@ mod unix {
             let stream = UnixStream::connect(name)?;
             Ok(Producer { stream })
         }
+    }
 
-        pub fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-            self.stream.write(data)
+    impl std::io::Write for Producer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.stream.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.stream.flush()
         }
     }
 }
@@ -22,7 +27,6 @@ mod unix {
 #[cfg(windows)]
 mod windows {
     use std::ffi::OsStr;
-    use std::io::Write;
     use std::os::windows::io::FromRawHandle;
 
     use windows_core::HSTRING;
@@ -68,11 +72,15 @@ mod windows {
             let pipe = open_pipe(name)?;
             Ok(Producer { pipe })
         }
+    }
 
-        pub fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-            let len = self.pipe.write(data)?;
-            self.pipe.flush()?;
-            Ok(len)
+    impl std::io::Write for Producer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.pipe.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.pipe.flush()
         }
     }
 }

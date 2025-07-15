@@ -1,5 +1,5 @@
 use friendly_pipes::{async_server, producer};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 const ENV: &str = "PIPE_PATH";
 
@@ -23,10 +23,12 @@ fn main() -> std::process::ExitCode {
     if std::env::args().count() < 2 {
         println!("server");
         let path = ensure_pipe_exists();
-        let on_recv_line = |line:String | {
-            let msg = serde_json::from_str::<Message>(&line)
-                .expect("Failed to parse JSON message");
-            println!("Received message [type = {}]: '{}'", msg.msg_type, msg.content);
+        let on_recv_line = |line: String| {
+            let msg = serde_json::from_str::<Message>(&line).expect("Failed to parse JSON message");
+            println!(
+                "Received message [type = {}]: '{}'",
+                msg.msg_type, msg.content
+            );
         };
         tokio::runtime::Runtime::new()
             .expect("Failed to create Tokio runtime")
@@ -37,7 +39,19 @@ fn main() -> std::process::ExitCode {
                 let children = run_children(&current_exe, &path);
                 wait_children(children);
                 server.stop();
-            });
+                server.wait().await
+            })
+            .map(|()| std::process::ExitCode::SUCCESS)
+            .or_else(|e| {
+                match e.try_into_panic() {
+                    Ok(panic) => std::panic::resume_unwind(panic),
+                    Err(e) => eprintln!("Server task failed: {:?}", e),
+                }
+                Ok::<std::process::ExitCode, std::convert::Infallible>(
+                    std::process::ExitCode::FAILURE,
+                )
+            })
+            .unwrap();
     } else if std::env::args().nth(1).is_some_and(|arg| arg == "client") {
         run_client();
     } else {
@@ -48,13 +62,14 @@ fn main() -> std::process::ExitCode {
 }
 
 fn run_client() {
-    println!("client");
+    println!("client {pid}", pid = std::process::id());
     let path = std::env::var_os(ENV).expect("PIPE_PATH environment variable not set");
     let mut client = producer::Producer::new(&path).expect("Failed to create producer");
-    let msg = Message::new_info(format!("Hello from client {pid}!", pid = std::process::id()));
-    client
-        .writeln_json(&msg)
-        .expect("Failed to write to pipe");
+    let msg = Message::new_info(format!(
+        "Hello from client {pid}!",
+        pid = std::process::id()
+    ));
+    serde_json::to_writer(&mut client, &msg).expect("Failed to serialize message to JSON");
     println!("Message sent to server.");
 }
 

@@ -84,10 +84,7 @@ mod unix {
         let Server { listener, cleanup } = server;
         listener.accept().await.map(|(stream, _)| {
             let client = ConsumerClient { stream };
-            let new_server = Server {
-                listener,
-                cleanup,
-            };
+            let new_server = Server { listener, cleanup };
             Some((client, new_server))
         })
     }
@@ -95,7 +92,10 @@ mod unix {
     impl Server {
         pub fn new_first(name: &std::ffi::OsStr) -> std::io::Result<Self> {
             let listener = UnixListener::bind(name)?;
-            Ok(Server { listener, cleanup: UnlinkOnDrop(std::path::PathBuf::from(name)) })
+            Ok(Server {
+                listener,
+                cleanup: UnlinkOnDrop(std::path::PathBuf::from(name)),
+            })
         }
     }
 }
