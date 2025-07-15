@@ -63,8 +63,17 @@ mod unix {
 
     use super::ConsumerClient;
 
+    struct UnlinkOnDrop(std::path::PathBuf);
+
+    impl Drop for UnlinkOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     pub struct Server {
         listener: UnixListener,
+        cleanup: UnlinkOnDrop,
     }
 
     pub type ConsumerClientImpl = UnixStream;
@@ -72,10 +81,12 @@ mod unix {
     pub async fn accept_connection(
         server: Server,
     ) -> std::io::Result<Option<(ConsumerClient, Server)>> {
-        server.listener.accept().await.map(|(stream, _)| {
+        let Server { listener, cleanup } = server;
+        listener.accept().await.map(|(stream, _)| {
             let client = ConsumerClient { stream };
             let new_server = Server {
-                listener: server.listener,
+                listener,
+                cleanup,
             };
             Some((client, new_server))
         })
@@ -84,7 +95,7 @@ mod unix {
     impl Server {
         pub fn new_first(name: &std::ffi::OsStr) -> std::io::Result<Self> {
             let listener = UnixListener::bind(name)?;
-            Ok(Server { listener })
+            Ok(Server { listener, cleanup: UnlinkOnDrop(std::path::PathBuf::from(name)) })
         }
     }
 }
